@@ -7,7 +7,8 @@ import {
   Database, 
   BarChart3,
   Menu,
-  X
+  X,
+  Megaphone
 } from 'lucide-react'
 import { useState } from 'react'
 import { clsx } from 'clsx'
@@ -15,6 +16,7 @@ import { clsx } from 'clsx'
 const navigation = [
   { name: 'Leads', href: '/leads', icon: Users },
   { name: 'Pipeline', href: '/pipeline', icon: Trello },
+  { name: 'Campaigns', href: '/campaigns', icon: Megaphone },
   { name: 'Sources', href: '/sources', icon: Database },
   { name: 'Analytics', href: '/analytics', icon: BarChart3 },
 ]
