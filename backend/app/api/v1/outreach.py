@@ -1,17 +1,26 @@
-"""Outreach API endpoints — campaigns, templates, sending, tracking."""
+"""Outreach API endpoints — campaigns, templates, sending, tracking, personalization, A/B testing."""
 from __future__ import annotations
 
 import uuid
-from typing import Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Lead, Message, MessageTemplate, OutreachCampaign, CampaignLead
-from app.schemas import APIResponse, success_response
+from app.schemas import APIResponse
+from app.core import success_response
 from app.core.errors import NotFoundError
+from app.outreach.sender import OutreachSender, EmailSender, LinkedInSender
+from app.outreach.personalizer import personalizer
+from app.outreach.sequencer import sequencer, SequenceStep
+from app.outreach.ab_testing import ab_testing, ABVariant, ABTestResult
+from app.outreach.tracker import tracker
+from app.outreach.compliance import compliance, warmup
+from app.outreach.classifier import reply_classifier, ReplySentiment
 
 router = APIRouter(tags=["Outreach"])
 
@@ -228,3 +237,245 @@ async def get_message_tracking(message_id: uuid.UUID, db: AsyncSession = Depends
             "tracking_data": message.tracking_data,
         }
     )
+
+
+# ─── Personalization ───
+
+@router.post("/outreach/personalize", response_model=APIResponse)
+async def personalize_message(
+    template_id: uuid.UUID,
+    lead_id: uuid.UUID,
+    contact_id: Optional[uuid.UUID] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Personalize a template with lead data."""
+    template_result = await db.execute(select(MessageTemplate).where(MessageTemplate.id == template_id))
+    template = template_result.scalar_one_or_none()
+    if not template:
+        raise NotFoundError("MessageTemplate", str(template_id))
+
+    lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead = lead_result.scalar_one_or_none()
+    if not lead:
+        raise NotFoundError("Lead", str(lead_id))
+
+    lead_data = {
+        "company_name": lead.company_name,
+        "company_domain": lead.company_domain,
+        "industry": lead.industry,
+        "tech_stack": lead.tech_stack,
+        "description": lead.description,
+        "location_city": lead.location_city,
+        "location_state": lead.location_state,
+        "location_country": lead.location_country,
+        "tags": lead.tags,
+    }
+
+    contact_data = None
+    if contact_id:
+        from app.models import Contact
+        contact_result = await db.execute(select(Contact).where(Contact.id == contact_id))
+        contact = contact_result.scalar_one_or_none()
+        if contact:
+            contact_data = {
+                "first_name": contact.first_name,
+                "last_name": contact.last_name,
+                "full_name": contact.full_name,
+                "role_title": contact.role_title,
+                "role": contact.role,
+            }
+
+    sender_data = {"name": "Ship Studio Team", "title": "Engineering Partner", "company": "Ship Studio", "email": "hello@shipstudio.dev"}
+
+    result = personalizer.fill_template(
+        template_body=template.body_template,
+        template_subject=template.subject,
+        lead_data=lead_data,
+        contact_data=contact_data,
+        sender_data=sender_data,
+    )
+
+    return success_response(data=result)
+
+
+# ─── A/B Testing ───
+
+@router.post("/outreach/ab-test/register", response_model=APIResponse, status_code=201)
+async def register_ab_test(
+    test_name: str,
+    variants: list[dict],
+    control_pct: float = 80,
+):
+    """Register an A/B test with multiple variants."""
+    ab_variants = [
+        ABVariant(
+            name=v.get("name", f"variant_{i}"),
+            subject=v.get("subject"),
+            body=v.get("body"),
+            channel=v.get("channel", "email"),
+        )
+        for i, v in enumerate(variants)
+    ]
+    ab_testing.register_test(test_name, ab_variants, control_pct)
+    return success_response(data={"test_name": test_name, "variants": len(ab_variants)})
+
+
+@router.get("/outreach/ab-test/{test_name}/results", response_model=APIResponse)
+async def get_ab_test_results(test_name: str):
+    """Get A/B test results."""
+    results = ab_testing.get_results(test_name)
+    winner = ab_testing.get_winner(test_name)
+    return success_response(data={"results": results, "winner": winner})
+
+
+# ─── Sequences ───
+
+@router.get("/outreach/sequences/default", response_model=APIResponse)
+async def get_default_sequence():
+    """Get the default outreach sequence."""
+    steps = sequencer.get_steps("default")
+    return success_response(data={
+        "steps": [
+            {
+                "day": s.day,
+                "channel": s.channel,
+                "action": s.action,
+                "subject_variants": s.subject_variants,
+                "condition": s.condition,
+                "wait_for_reply": s.wait_for_reply,
+            }
+            for s in steps
+        ]
+    })
+
+
+@router.post("/outreach/send-personalized", response_model=APIResponse)
+async def send_personalized(
+    lead_id: uuid.UUID,
+    template_id: uuid.UUID,
+    channel: str = "email",
+    db: AsyncSession = Depends(get_db),
+):
+    """Personalize a template and send immediately."""
+    template_result = await db.execute(select(MessageTemplate).where(MessageTemplate.id == template_id))
+    template = template_result.scalar_one_or_none()
+    if not template:
+        raise NotFoundError("MessageTemplate", str(template_id))
+
+    lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
+    lead = lead_result.scalar_one_or_none()
+    if not lead:
+        raise NotFoundError("Lead", str(lead_id))
+
+    lead_data = {
+        "company_name": lead.company_name,
+        "company_domain": lead.company_domain,
+        "industry": lead.industry,
+        "tech_stack": lead.tech_stack,
+        "description": lead.description,
+    }
+    sender_data = {"name": "Ship Studio Team", "title": "Engineering Partner", "company": "Ship Studio", "email": "hello@shipstudio.dev"}
+
+    personalized = personalizer.fill_template(template.body_template, template.subject, lead_data, sender_data=sender_data)
+
+    sender = OutreachSender()
+    result = await sender.send(
+        channel=channel,
+        recipient=lead.company_name,
+        subject=personalized["subject"],
+        body=personalized["body"],
+    )
+
+    if result.success:
+        message = Message(
+            lead_id=lead_id,
+            template_id=template_id,
+            channel=channel,
+            subject=personalized["subject"],
+            body_text=personalized["body"],
+            status="sent" if result.external_id else "queued",
+            external_id=result.external_id,
+        )
+        db.add(message)
+        lead.status = "contacted"
+        db.add(lead)
+
+    return success_response(data={
+        "success": result.success,
+        "message_id": str(message.id) if result.success else None,
+        "external_id": result.external_id,
+        "error": result.error,
+        "personalized": personalized,
+    })
+
+
+# ─── Reply Classification ───
+
+@router.post("/outreach/classify-reply", response_model=APIResponse)
+async def classify_reply(
+    reply_text: str = Query(..., min_length=1),
+):
+    """Classify a reply's sentiment."""
+    result = reply_classifier.classify(reply_text)
+    return success_response(data={
+        "sentiment": result.sentiment.value,
+        "confidence": result.confidence,
+        "matched_keywords": result.matched_keywords,
+        "suggested_action": result.suggested_action,
+    })
+
+
+# ─── Compliance ───
+
+@router.post("/outreach/unsubscribe", response_model=APIResponse)
+async def unsubscribe(
+    email: str,
+    campaign_id: Optional[str] = None,
+):
+    """Unsubscribe an email address."""
+    compliance.unsubscribe(email, campaign_id)
+    return success_response(data={"email": email, "status": "unsubscribed"})
+
+
+@router.get("/outreach/compliance/suppression-list", response_model=APIResponse)
+async def get_suppression_list():
+    """Get the suppression list (GDPR export)."""
+    return success_response(data={"suppressed": compliance.get_suppression_list()})
+
+
+@router.get("/outreach/compliance/warmup-status", response_model=APIResponse)
+async def get_warmup_status(domain: str = "shipstudio.dev"):
+    """Get warm-up status for a sending domain."""
+    status = warmup.get_daily_limit(domain)
+    fully_warmed = warmup.is_fully_warmed(domain)
+    return success_response(data={
+        "domain": domain,
+        "daily_limit": status,
+        "fully_warmed": fully_warmed,
+    })
+
+
+# ─── Tracking Webhooks ───
+
+@router.post("/webhooks/email-status", response_model=APIResponse)
+async def email_status_webhook(
+    event_type: str,
+    message_id: str,
+    email: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+):
+    """Webhook endpoint for email delivery status (Resend/SendGrid)."""
+    tracker.record_event(message_id, event_type, metadata or {})
+
+    if event_type == "bounced" and email:
+        compliance.record_bounce(email, "hard" if metadata and metadata.get("severity") == "permanent" else "soft")
+
+    return success_response(data={"recorded": True})
+
+
+@router.get("/outreach/tracking/{message_id}", response_model=APIResponse)
+async def get_tracking_detail(message_id: str):
+    """Get detailed tracking for a message."""
+    status = tracker.get_message_status(message_id)
+    events = tracker.get_events(message_id)
+    return success_response(data={"status": status, "events": events})

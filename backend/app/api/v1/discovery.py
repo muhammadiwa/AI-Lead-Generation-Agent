@@ -19,8 +19,8 @@ from app.schemas import (
     DiscoverySearchRequest,
     LeadCreate,
     LeadResponse,
-    success_response,
 )
+from app.core import success_response
 from app.core.errors import NotFoundError, AppError
 
 router = APIRouter(tags=["Discovery"])

@@ -17,9 +17,8 @@ from app.schemas import (
     LeadUpdate,
     LeadListResponse,
     APIResponse,
-    success_response,
-    pagination_meta,
 )
+from app.core import success_response, pagination_meta
 from app.collectors.base import CollectedLead
 from app.core.errors import NotFoundError
 

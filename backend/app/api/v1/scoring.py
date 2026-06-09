@@ -14,8 +14,8 @@ from app.schemas import (
     APIResponse,
     LeadScoreResponse,
     ScoringWeightsUpdate,
-    success_response,
 )
+from app.core import success_response
 from app.core.errors import NotFoundError
 
 router = APIRouter(tags=["Scoring"])

@@ -15,8 +15,8 @@ from app.schemas import (
     ICPFilterCreate,
     ICPProfileCreate,
     ICPProfileResponse,
-    success_response,
 )
+from app.core import success_response
 from app.core.errors import NotFoundError
 
 router = APIRouter(tags=["ICP"])

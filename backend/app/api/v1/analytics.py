@@ -7,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Lead, Message, Job, DailyStat
-from app.schemas import APIResponse, success_response
+from app.schemas import APIResponse
+from app.core import success_response
 
 router = APIRouter(tags=["Analytics"])
 
