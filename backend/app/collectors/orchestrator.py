@@ -13,6 +13,11 @@ from app.collectors.google_maps import GoogleMapsCollector
 from app.collectors.social_media import SocialMediaCollector
 from app.collectors.job_platforms import JobPlatformCollector
 from app.collectors.business_directories import BusinessDirectoryCollector
+from app.collectors.search_engines import GoogleBingCollector
+from app.collectors.threads_tiktok import ThreadsTikTokCollector
+from app.collectors.startup_directories import StartupDirectoryCollector
+from app.collectors.google_business import GoogleBusinessCollector
+from app.collectors.community_platforms import CommunityCollector
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +31,11 @@ COLLECTOR_REGISTRY: Dict[str, Type[BaseCollector]] = {
     "social_media": SocialMediaCollector,
     "job_platforms": JobPlatformCollector,
     "business_directory": BusinessDirectoryCollector,
+    "search_engines": GoogleBingCollector,
+    "social_platforms": ThreadsTikTokCollector,
+    "startup_directories": StartupDirectoryCollector,
+    "google_business": GoogleBusinessCollector,
+    "community_platforms": CommunityCollector,
 }
 
 
