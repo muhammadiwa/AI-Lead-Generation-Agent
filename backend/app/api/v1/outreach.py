@@ -21,6 +21,8 @@ from app.outreach.ab_testing import ab_testing, ABVariant, ABTestResult
 from app.outreach.tracker import tracker
 from app.outreach.compliance import compliance, warmup
 from app.outreach.classifier import reply_classifier, ReplySentiment
+from app.outreach.whatsapp import WhatsAppSender
+from app.outreach.threads_dm import ThreadsDMSender
 
 router = APIRouter(tags=["Outreach"])
 
@@ -479,3 +481,82 @@ async def get_tracking_detail(message_id: str):
     status = tracker.get_message_status(message_id)
     events = tracker.get_events(message_id)
     return success_response(data={"status": status, "events": events})
+
+
+# ─── WhatsApp Messaging ───
+
+@router.post("/outreach/whatsapp/send", response_model=APIResponse)
+async def send_whatsapp(
+    to: str,
+    body: str = "",
+    template_name: Optional[str] = None,
+):
+    """Send a WhatsApp message (text or template)."""
+    sender = WhatsAppSender()
+    if template_name:
+        result = await sender.send_template(to, template_name, {})
+    else:
+        result = await sender.send_text(to, body)
+    return success_response(data={
+        "success": result.success,
+        "channel": "whatsapp",
+        "message_id": result.message_id,
+        "error": result.error,
+    })
+
+
+@router.get("/outreach/whatsapp/status", response_model=APIResponse)
+async def whatsapp_status():
+    """Check WhatsApp API configuration status."""
+    from app.config import settings
+    configured = bool(settings.__dict__.get("whatsapp_from_number", ""))
+    return success_response(data={
+        "configured": configured,
+        "message": "WhatsApp API configured" if configured else "WhatsApp API not configured — set WHATSAPP_FROM_NUMBER",
+    })
+
+
+# ─── Threads DM Messaging ───
+
+@router.post("/outreach/threads/send", response_model=APIResponse)
+async def send_threads_dm(
+    to: str,
+    body: str,
+):
+    """Send a Threads DM."""
+    sender = ThreadsDMSender()
+    result = await sender.send(to=to, body=body)
+    return success_response(data={
+        "success": result.success,
+        "channel": "threads_dm",
+        "message_id": result.message_id,
+        "error": result.error,
+    })
+
+
+@router.post("/outreach/threads/sequence", response_model=APIResponse)
+async def send_threads_sequence(
+    to: str,
+    messages: list[str],
+    delay_seconds: int = 60,
+):
+    """Send a sequence of Threads DMs with delays."""
+    sender = ThreadsDMSender()
+    results = await sender.send_dm_sequence(to, messages, delay_seconds)
+    return success_response(data={
+        "results": [
+            {"success": r.success, "error": r.error, "index": i}
+            for i, r in enumerate(results)
+        ],
+    })
+
+
+@router.get("/outreach/threads/status", response_model=APIResponse)
+async def threads_status():
+    """Check Threads API configuration status."""
+    from app.config import settings
+    configured = bool(settings.__dict__.get("threads_access_token", ""))
+    return success_response(data={
+        "configured": configured,
+        "message": "Threads API configured" if configured else "Threads API not configured — set THREADS_ACCESS_TOKEN",
+    })
